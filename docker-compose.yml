@@ -1,0 +1,87 @@
+x-api: &api
+  image: seatsurge-api:local
+  build: ./backend
+  restart: unless-stopped
+  environment: &api-env
+    PGHOST: postgres
+    PGUSER: seatsurge
+    PGDATABASE: seatsurge
+    PGPASSWORD: ${POSTGRES_PASSWORD:-local-seatsurge-password}
+    REDIS_URL: redis://redis:6379/0
+    SESSION_SECRET: ${SESSION_SECRET:-seatsurge-local-demo-signing-key-change-me}
+    ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+    DEMO_MODE: ${DEMO_MODE:-false}
+    APP_ORIGINS: ${APP_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+    SECURE_COOKIES: ${SECURE_COOKIES:-false}
+    ADMISSION_CAPACITY: ${ADMISSION_CAPACITY:-100}
+    ADMISSION_SECONDS: ${ADMISSION_SECONDS:-600}
+    TURNSTILE_SECRET: ${TURNSTILE_SECRET:-}
+    TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
+  depends_on:
+    redis:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+    interval: 5s
+    timeout: 4s
+    retries: 8
+    start_period: 15s
+
+services:
+  nginx:
+    image: nginx:1.28-alpine
+    ports: ["127.0.0.1:8080:8080"]
+    volumes: ["./nginx/nginx.conf:/etc/nginx/nginx.conf:ro"]
+    depends_on:
+      - api-a
+      - api-b
+      - frontend
+    networks:
+      default:
+        ipv4_address: 172.31.250.10
+  frontend:
+    build: ./frontend
+  api-a:
+    <<: *api
+    environment:
+      <<: *api-env
+      INSTANCE_ID: api-a
+      TRUSTED_PROXY: 172.31.250.10
+  api-b:
+    <<: *api
+    environment:
+      <<: *api-env
+      INSTANCE_ID: api-b
+      TRUSTED_PROXY: 172.31.250.10
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 15
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: seatsurge
+      POSTGRES_USER: seatsurge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-seatsurge-password}
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seatsurge -d seatsurge"]
+      interval: 3s
+      timeout: 2s
+      retries: 15
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24
+volumes:
+  postgres-data:
+  redis-data:
